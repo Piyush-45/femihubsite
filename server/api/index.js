@@ -33,7 +33,7 @@ app.use(session({
 
 app.use(
 	cors({
-		origin: "http://localhost:3000", // Replace with your frontend URL
+		origin: "http://localhost:3000",
 		methods: "GET,POST,PUT,DELETE",
 		credentials: true,
 	})
@@ -41,6 +41,11 @@ app.use(
 
 app.use(passport.initialize());
 app.use(passport.session());
+
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({ error: err.message });
+});
 
 passport.use(
 	new GoogleStrategy(
@@ -66,10 +71,10 @@ passport.deserializeUser((user, done) => {
 
 // MySQL connection
 const db = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: '', // Replace with your MySQL password
-    database: 'femihub'
+    host: '45.56.98.224',
+    user: 'femihub',
+    password:'', 
+    database: 'femihub_femihub_db'
 });
 
 db.connect(err => {
@@ -122,7 +127,7 @@ app.post('/login', (req, res) => {
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) return res.status(400).json({ error: 'Invalid password' });
         const token = jwt.sign({ id: user.id }, 'your_jwt_secret', { expiresIn: '1h' });
-        res.json({ token });
+        res.json({ token ,  user: { id: user.id, email: user.email, ...otherUserDetails } });
     });
 });
 
@@ -478,6 +483,274 @@ app.get('/v1/payments/payment', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+// Orders endpoints (CRUD)
+// app.post('/orders', (req, res, next) => {
+//     const { user_id, product_id, amount, date } = req.body;
+//     const query = 'INSERT INTO orders (user_id, product_id, amount, date) VALUES (?, ?, ?, ?)';
+//     db.query(query, [user_id, product_id, amount, date], (err, result) => {
+//         if (err) return next(err);
+//         res.status(201).json({ message: 'Order created successfully' });
+//     });
+// });
+
+app.post('/orders', (req, res, next) => {
+  const { user_id, products } = req.body;
+  let totalAmount = 0;
+  products.forEach(product => {
+      totalAmount += product.price * product.quantity;
+  });
+
+  db.beginTransaction((err) => {
+      if (err) return next(err);
+
+      const queryOrder = 'INSERT INTO orders (user_id, total_amount) VALUES (?, ?)';
+      db.query(queryOrder, [user_id, totalAmount], (err, result) => {
+          if (err) {
+              return db.rollback(() => next(err));
+          }
+
+          const orderId = result.insertId;
+          const queryOrderItems = 'INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ?';
+          const orderItems = products.map(product => [orderId, product.product_id, product.quantity, product.price]);
+
+          db.query(queryOrderItems, [orderItems], (err, result) => {
+              if (err) {
+                  return db.rollback(() => next(err));
+              }
+
+              db.commit((err) => {
+                  if (err) {
+                      return db.rollback(() => next(err));
+                  }
+                  res.status(201).json({ message: 'Order created successfully', orderId });
+              });
+          });
+      });
+  });
+});
+
+
+app.get('/orders', (req, res, next) => {
+    const query = 'SELECT * FROM orders';
+    db.query(query, (err, results) => {
+        if (err) return next(err);
+        res.json(results);
+    });
+});
+
+app.get('/orders/:id', (req, res, next) => {
+    const { id } = req.params;
+    const query = 'SELECT * FROM orders WHERE id = ?';
+    db.query(query, [id], (err, result) => {
+        if (err) return next(err);
+        res.json(result);
+    });
+});
+
+app.put('/orders/:id', (req, res, next) => {
+    const { id } = req.params;
+    const { user_id, product_id, amount, date } = req.body;
+    const query = 'UPDATE orders SET user_id = ?, product_id = ?, amount = ?, date = ? WHERE id = ?';
+    db.query(query, [user_id, product_id, amount, date, id], (err, result) => {
+        if (err) return next(err);
+        res.json({ message: 'Order updated successfully' });
+    });
+});
+
+app.delete('/orders/:id', (req, res, next) => {
+    const { id } = req.params;
+    const query = 'DELETE FROM orders WHERE id = ?';
+    db.query(query, [id], (err, result) => {
+        if (err) return next(err);
+        res.json({ message: 'Order deleted successfully' });
+    });
+});
+
+app.post('/appointments', (req, res) => {
+    const { user_id, username, appointment_reason } = req.body;
+
+    const query = 'INSERT INTO appointments (user_id, username, appointment_reason) VALUES (?, ?, ?)';
+    db.query(query, [user_id, username, appointment_reason], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.status(201).json({ message: 'Appointment created successfully' });
+    });
+});
+
+app.get('/appointments', (req, res) => {
+    const query = 'SELECT * FROM appointments';
+    db.query(query, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+app.get('/appointments/:id', (req, res) => {
+    const { id } = req.params;
+    const query = 'SELECT * FROM appointments WHERE id = ?';
+    db.query(query, [id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(result);
+    });
+});
+
+app.put('/appointments/:id', (req, res) => {
+    const { id } = req.params;
+    const { user_id, username, appointment_reason } = req.body;
+    const query = 'UPDATE appointments SET user_id = ?, username = ?, appointment_reason = ? WHERE id = ?';
+    db.query(query, [user_id, username, appointment_reason, id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'Appointment updated successfully' });
+    });
+});
+
+app.delete('/appointments/:id', (req, res) => {
+    const { id } = req.params;
+    const query = 'DELETE FROM appointments WHERE id = ?';
+    db.query(query, [id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'Appointment deleted successfully' });
+    });
+});
+
+// CRUD operations for categories
+app.post('/categories', (req, res) => {
+    const { name, description } = req.body;
+    const query = 'INSERT INTO categories (name, description) VALUES (?, ?)';
+    db.query(query, [name, description], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.status(201).json({ message: 'Category created successfully' });
+    });
+});
+
+app.get('/categories', (req, res) => {
+    const query = 'SELECT * FROM categories';
+    db.query(query, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+app.get('/categories/:id', (req, res) => {
+    const { id } = req.params;
+    const query = 'SELECT * FROM categories WHERE id = ?';
+    db.query(query, [id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(result);
+    });
+});
+
+app.put('/categories/:id', (req, res) => {
+    const { id } = req.params;
+    const { name, description } = req.body;
+    const query = 'UPDATE categories SET name = ?, description = ? WHERE id = ?';
+    db.query(query, [name, description, id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'Category updated successfully' });
+    });
+});
+
+app.delete('/categories/:id', (req, res) => {
+    const { id } = req.params;
+    const query = 'DELETE FROM categories WHERE id = ?';
+    db.query(query, [id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'Category deleted successfully' });
+    });
+});
+
+// Endpoint to get products grouped by category
+app.get('/products-by-category', (req, res) => {
+    const query = `
+        SELECT c.name as category_name, p.id as product_id, p.name as product_name, p.description, p.price, p.image 
+        FROM products p 
+        JOIN categories c ON p.category_id = c.id
+        ORDER BY c.name, p.name
+    `;
+    db.query(query, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+
+// Get latest products
+router.get('/shop/latest', (req, res) => {
+    const query = 'SELECT * FROM products ORDER BY created_at DESC LIMIT 10';
+    db.query(query, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+// Get favorite products
+router.get('/favorites', (req, res) => {
+    const { userId } = req.query;
+    const query = 'SELECT p.* FROM favorites f JOIN products p ON f.product_id = p.id WHERE f.user_id = ?';
+    db.query(query, [userId], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+
+// Book a consultation
+router.post('/consultation', (req, res) => {
+    const { username, userId, reason } = req.body;
+    const query = 'INSERT INTO consultations (username, user_id, reason) VALUES (?, ?, ?)';
+    db.query(query, [username, userId, reason], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.status(201).json({ message: 'Consultation booked successfully' });
+    });
+});
+
+// Get products by various filters
+router.get('/shop', (req, res) => {
+    const { size, fabric, pack, style, minPrice, maxPrice } = req.query;
+    let query = 'SELECT * FROM products WHERE 1=1';
+    let params = [];
+
+    if (size) {
+        query += ' AND size = ?';
+        params.push(size);
+    }
+    if (fabric) {
+        query += ' AND fabric = ?';
+        params.push(fabric);
+    }
+    if (pack) {
+        query += ' AND pack = ?';
+        params.push(pack);
+    }
+    if (style) {
+        query += ' AND style = ?';
+        params.push(style);
+    }
+    if (minPrice) {
+        query += ' AND price >= ?';
+        params.push(minPrice);
+    }
+    if (maxPrice) {
+        query += ' AND price <= ?';
+        params.push(maxPrice);
+    }
+
+    db.query(query, params, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+// Get products by category
+router.get('/shop/category/:categoryId', (req, res) => {
+    const { categoryId } = req.params;
+    const query = 'SELECT * FROM products WHERE category_id = ?';
+    db.query(query, [categoryId], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
 // Reminder endpoints (to be added later)
 
 const PORT = 3030;
